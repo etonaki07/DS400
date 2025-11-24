@@ -171,3 +171,122 @@ mcmc_dens(prediction) +
 **Interpretation:** Given your model + priors + the 500 days of data, there’s a **95% probability** that on a 75 degree day ridership will fall between **1,492 and 6,503** rides
 
 How do we feel about the uncertainty in this prediction?
+
+```{r}
+# Bayesian crochet tension demo (yarn weight as predictor)
+# Required packages:
+# install.packages(c("bayesrules","tidyverse","rstanarm","bayesplot")) 
+# or use brms if you prefer.
+
+library(bayesrules)   # convenience helpers for teaching Bayesian workflows
+library(tidyverse)
+library(rstanarm)     # or brms
+library(bayesplot)
+
+set.seed(2025)
+
+# -----------------------------
+# 1) Simulate theoretical data
+# -----------------------------
+# We'll measure yarn weight as grams-per-meter (g_per_m)
+n <- 60
+yarn_gpm <- runif(n, 50, 400)   # 50 g/m (very thin) to 400 g/m (very thick)
+# Assume thicker yarn slightly reduces tension variability:
+beta0_true <- 2.0    # baseline tension_sd in mm
+beta1_true <- -0.03  # per 1 g/m; so 10 g/m -> -0.3 mm
+sigma_true <- 0.45
+
+tension_sd <- beta0_true + beta1_true * yarn_gpm + rnorm(n, 0, sigma_true)
+
+crochet <- tibble(yarn_gpm = yarn_gpm,
+                  tension_sd = tension_sd)
+
+# Quick plot of simulated data
+ggplot(crochet, aes(x = yarn_gpm, y = tension_sd)) +
+  geom_point() +
+  labs(x = "Yarn weight (g/m)", y = "Stitch length SD (mm)",
+       title = "Simulated tension data (theoretical)")
+
+# -----------------------------
+# 2) Priors
+# -----------------------------
+# weakly informative priors centered near 0
+prior_intercept <- normal(location = 0, scale = 2)  # intercept
+prior_coef      <- normal(location = 0, scale = 1)  # slope
+prior_sigma     <- exponential(rate = 1)            # error
+
+# -----------------------------
+# 3) Fit Bayesian linear regression (rstanarm)
+# -----------------------------
+fit <- stan_glm(
+  tension_sd ~ yarn_gpm,
+  data = crochet,
+  family = gaussian(),
+  prior_intercept = prior_intercept,
+  prior = prior_coef,
+  prior_aux = prior_sigma,
+  chains = 4, iter = 4000, refresh = 0, seed = 2025
+)
+
+print(fit)
+posterior_samples <- as.matrix(fit)
+
+# -----------------------------
+# 4) Posterior summaries & plots
+# -----------------------------
+# Posterior summary
+posterior_summary <- summary(fit, digits = 3)
+posterior_summary
+
+# Plot posterior for slope
+mcmc_areas(as.matrix(fit)[, c("(Intercept)", "yarn_gpm")],
+           prob = 0.95) +
+  ggtitle("Posterior distributions (Intercept and yarn_gpm)")
+
+# Posterior predictive regression line + credible interval
+new_x <- tibble(yarn_gpm = seq(min(crochet$yarn_gpm), max(crochet$yarn_gpm), length.out = 100))
+preds <- posterior_predict(fit, newdata = new_x)
+pred_mean <- apply(preds, 2, mean)
+pred_lower <- apply(preds, 2, quantile, probs = 0.025)
+pred_upper <- apply(preds, 2, quantile, probs = 0.975)
+
+pred_df <- bind_cols(new_x,
+                     tibble(pred_mean = pred_mean,
+                            pred_lower = pred_lower,
+                            pred_upper = pred_upper))
+
+ggplot(crochet, aes(y = tension_sd, x = yarn_gpm)) +
+  geom_point(alpha = 0.6) +
+  geom_line(data = pred_df, aes(x = yarn_gpm, y = pred_mean), size = 1) +
+  geom_ribbon(data = pred_df, aes(x = yarn_gpm, ymin = pred_lower, ymax = pred_upper), alpha = 0.15) +
+  labs(x = "Yarn weight (g/m)", y = "Stitch length SD (mm)",
+       title = "Posterior predictive regression and 95% credible band")
+
+# -----------------------------
+# 5) Interpretive summary (print)
+# -----------------------------
+beta1_post_mean <- mean(posterior_samples[, "yarn_gpm"])
+beta1_post_ci   <- quantile(posterior_samples[, "yarn_gpm"], probs = c(0.025, 0.975))
+p_beta1_neg     <- mean(posterior_samples[, "yarn_gpm"] < 0)
+
+cat("Posterior mean for beta1 (yarn_gpm):", round(beta1_post_mean, 3), "\n")
+cat("95% credible interval for beta1:", round(beta1_post_ci[1],3), "to", round(beta1_post_ci[2],3), "\n")
+cat("Posterior probability beta1 < 0:", round(p_beta1_neg, 3), "\n")
+
+```
+
+```{r}
+library(bayesrules)
+library(tidyverse)
+library(rstanarm)
+
+model <- stan_glm(
+  tension_sd ~ yarn_gpm,
+  data = crochet,
+  prior_intercept = normal(0, 2),
+  prior = normal(0, 1),
+  prior_aux = exponential(1)
+)
+summary(model)
+
+```
